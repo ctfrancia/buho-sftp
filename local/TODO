@@ -1,0 +1,5 @@
+- run server
+- client to connect and hello w/ no auth
+- key based auth
+- pty
+- port forwarding
