@@ -88,6 +88,7 @@ func main() {
 
 	// Before use, a handshake must be performed on the incoming
 	// net.Conn.
+	// connect with verbose mode
 	conn, chans, reqs, err := ssh.NewServerConn(nConn, config)
 	if err != nil {
 		log.Fatal("failed to handshake: ", err)
