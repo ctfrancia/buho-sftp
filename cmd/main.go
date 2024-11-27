@@ -5,10 +5,9 @@ import (
 	"log"
 	"net"
 	"os"
-	// "sync"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	// "golang.org/x/term"
 )
 
 const (
@@ -74,81 +73,65 @@ func main() {
 		log.Fatal("Failed to parse private key: ", err)
 	}
 	config.AddHostKey(private)
-
+	// TODO: https://pkg.go.dev/github.com/pkg/sftp#example-package
 	// Once a ServerConfig has been configured, connections can be
 	// accepted.
 	listener, err := net.Listen("tcp", "0.0.0.0:2022")
 	if err != nil {
 		log.Fatal("failed to listen for connection: ", err)
 	}
-	nConn, err := listener.Accept()
-	if err != nil {
-		log.Fatal("failed to accept incoming connection: ", err)
-	}
+	defer listener.Close()
 
-	// Before use, a handshake must be performed on the incoming
-	// net.Conn.
-	// connect with verbose mode
-	conn, chans, reqs, err := ssh.NewServerConn(nConn, config)
-	if err != nil {
-		log.Fatal("failed to handshake: ", err)
-	}
-
-	log.Printf("chans: %v", chans, "reqs: %v", reqs)
-	log.Printf("logged in with key %s", conn.Permissions.Extensions["pubkey-fp"])
-	/*
-		var wg sync.WaitGroup
-		defer wg.Wait()
-
-		// The incoming Request channel must be serviced.
-		wg.Add(1)
-		go func() {
-			ssh.DiscardRequests(reqs)
-			wg.Done()
-		}()
-
-		// Service the incoming Channel channel.
-		for newChannel := range chans {
-			// Channels have a type, depending on the application level
-			// protocol intended. In the case of a shell, the type is
-			// "session" and ServerShell may be used to present a simple
-			// terminal interface.
-			if newChannel.ChannelType() != "session" {
-				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-				continue
-			}
-			channel, requests, err := newChannel.Accept()
-			if err != nil {
-				log.Fatalf("Could not accept channel: %v", err)
-			}
-
-			// Sessions have out-of-band requests such as "shell",
-			// "pty-req" and "env".  Here we handle only the
-			// "shell" request.
-			wg.Add(1)
-			go func(in <-chan *ssh.Request) {
-				for req := range in {
-					req.Reply(req.Type == "shell", nil)
-				}
-				wg.Done()
-			}(requests)
-
-			term := term.NewTerminal(channel, "> ")
-
-			wg.Add(1)
-			go func() {
-				defer func() {
-					channel.Close()
-					wg.Done()
-				}()
-				for {
-					line, err := term.ReadLine()
-					if err != nil {
-						break
-					}
-					fmt.Println(line)
-				}
-			}()
+	for {
+		// Accept connections
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("failed to accept connection: %v", err)
+			continue
 		}
-	*/
+
+		// Handshake
+		serverConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+		if err != nil {
+			log.Printf("failed to handshake: %v", err)
+			continue
+		}
+
+		// Discard all global out-of-band requests
+		go ssh.DiscardRequests(reqs)
+
+		// Handle incoming channels (SSH channels are used for interactive sessions or SFTP)
+		for ch := range chans {
+			go handleChannel(serverConn, ch)
+		}
+
+	}
+}
+
+// handleChannel processes a single channel (for SFTP file transfers)
+func handleChannel(serverConn *ssh.ServerConn, ch ssh.NewChannel) {
+	// Accept the channel
+	channel, _, err := ch.Accept()
+	if err != nil {
+		log.Printf("failed to accept channel: %v", err)
+		return
+	}
+	defer channel.Close()
+
+	// Start an SFTP server on this channel
+	client, err := sftp.NewServer(channel)
+	if err != nil {
+		log.Printf("failed to start SFTP server: %v", err)
+		return
+	}
+	defer client.Close()
+
+	// The server automatically processes requests (like WRITE for file upload)
+	// so no need to manually handle requests.
+	if err := client.Serve(); err != nil {
+		log.Printf("failed to serve SFTP requests: %v", err)
+		return
+	}
+
+	log.Println("SFTP session ended successfully")
 }
