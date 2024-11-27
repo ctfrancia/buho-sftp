@@ -1,5 +1,3 @@
-id_rsa
-<<<<<<< HEAD
+id_rsa*
 internal/keys/*
-=======
->>>>>>> acfc991 (before pull)
+

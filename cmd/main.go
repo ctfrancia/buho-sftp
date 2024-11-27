@@ -11,11 +11,15 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	authorizedKeysPath = "internal/keys/authorized_keys"
+)
+
 func main() {
 	// Public key authentication is done by comparing
 	// the public key of a received connection
 	// with the entries in the authorized_keys file.
-	authorizedKeysBytes, err := os.ReadFile("authorized_keys")
+	authorizedKeysBytes, err := os.ReadFile(authorizedKeysPath)
 	if err != nil {
 		log.Fatalf("Failed to load authorized_keys, err: %v", err)
 	}
@@ -35,14 +39,16 @@ func main() {
 	// certificate details and handles authentication of ServerConns.
 	config := &ssh.ServerConfig{
 		// Remove to disable password auth.
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			// Should use constant-time compare (or better, salt+hash) in
-			// a production setting.
-			if c.User() == "testuser" && string(pass) == "tiger" {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("password rejected for %q", c.User())
-		},
+		/*
+			PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+				// Should use constant-time compare (or better, salt+hash) in
+				// a production setting.
+				if c.User() == "testuser" && string(pass) == "tiger" {
+					return nil, nil
+				}
+				return nil, fmt.Errorf("password rejected for %q", c.User())
+			},
+		*/
 
 		// Remove to disable public key auth.
 		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
@@ -86,6 +92,7 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to handshake: ", err)
 	}
+
 	log.Printf("logged in with key %s", conn.Permissions.Extensions["pubkey-fp"])
 
 	var wg sync.WaitGroup
