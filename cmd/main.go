@@ -5,10 +5,10 @@ import (
 	"log"
 	"net"
 	"os"
-	"sync"
+	// "sync"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/term"
+	// "golang.org/x/term"
 )
 
 const (
@@ -94,59 +94,61 @@ func main() {
 		log.Fatal("failed to handshake: ", err)
 	}
 
+	log.Printf("chans: %v", chans, "reqs: %v", reqs)
 	log.Printf("logged in with key %s", conn.Permissions.Extensions["pubkey-fp"])
+	/*
+		var wg sync.WaitGroup
+		defer wg.Wait()
 
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	// The incoming Request channel must be serviced.
-	wg.Add(1)
-	go func() {
-		ssh.DiscardRequests(reqs)
-		wg.Done()
-	}()
-
-	// Service the incoming Channel channel.
-	for newChannel := range chans {
-		// Channels have a type, depending on the application level
-		// protocol intended. In the case of a shell, the type is
-		// "session" and ServerShell may be used to present a simple
-		// terminal interface.
-		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-		channel, requests, err := newChannel.Accept()
-		if err != nil {
-			log.Fatalf("Could not accept channel: %v", err)
-		}
-
-		// Sessions have out-of-band requests such as "shell",
-		// "pty-req" and "env".  Here we handle only the
-		// "shell" request.
-		wg.Add(1)
-		go func(in <-chan *ssh.Request) {
-			for req := range in {
-				req.Reply(req.Type == "shell", nil)
-			}
-			wg.Done()
-		}(requests)
-
-		term := term.NewTerminal(channel, "> ")
-
+		// The incoming Request channel must be serviced.
 		wg.Add(1)
 		go func() {
-			defer func() {
-				channel.Close()
-				wg.Done()
-			}()
-			for {
-				line, err := term.ReadLine()
-				if err != nil {
-					break
-				}
-				fmt.Println(line)
-			}
+			ssh.DiscardRequests(reqs)
+			wg.Done()
 		}()
-	}
+
+		// Service the incoming Channel channel.
+		for newChannel := range chans {
+			// Channels have a type, depending on the application level
+			// protocol intended. In the case of a shell, the type is
+			// "session" and ServerShell may be used to present a simple
+			// terminal interface.
+			if newChannel.ChannelType() != "session" {
+				newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+				continue
+			}
+			channel, requests, err := newChannel.Accept()
+			if err != nil {
+				log.Fatalf("Could not accept channel: %v", err)
+			}
+
+			// Sessions have out-of-band requests such as "shell",
+			// "pty-req" and "env".  Here we handle only the
+			// "shell" request.
+			wg.Add(1)
+			go func(in <-chan *ssh.Request) {
+				for req := range in {
+					req.Reply(req.Type == "shell", nil)
+				}
+				wg.Done()
+			}(requests)
+
+			term := term.NewTerminal(channel, "> ")
+
+			wg.Add(1)
+			go func() {
+				defer func() {
+					channel.Close()
+					wg.Done()
+				}()
+				for {
+					line, err := term.ReadLine()
+					if err != nil {
+						break
+					}
+					fmt.Println(line)
+				}
+			}()
+		}
+	*/
 }
