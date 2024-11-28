@@ -82,30 +82,67 @@ func main() {
 	}
 	defer listener.Close()
 
-	for {
-		// Accept connections
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("failed to accept connection: %v", err)
-			continue
-		}
+	// TODO: Start with this part below!
+	var conn *ssh.Client // this is nil atm
 
-		// Handshake
-		serverConn, chans, reqs, err := ssh.NewServerConn(conn, config)
-		if err != nil {
-			log.Printf("failed to handshake: %v", err)
-			continue
-		}
-
-		// Discard all global out-of-band requests
-		go ssh.DiscardRequests(reqs)
-
-		// Handle incoming channels (SSH channels are used for interactive sessions or SFTP)
-		for ch := range chans {
-			go handleChannel(serverConn, ch)
-		}
-
+	client, err := sftp.NewClient()
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer client.Close()
+	// walk a directory
+	w := client.Walk("/home/user")
+	for w.Step() {
+		if w.Err() != nil {
+			continue
+		}
+		log.Println(w.Path())
+	}
+
+	// leave your mark
+	f, err := client.Create("hello.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := f.Write([]byte("Hello world!")); err != nil {
+		log.Fatal(err)
+	}
+	f.Close()
+
+	// check it's there
+	fi, err := client.Lstat("hello.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(fi)
+
+	/*
+		for {
+			// Accept connections
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Printf("failed to accept connection: %v", err)
+				continue
+			}
+
+			// Handshake
+			serverConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+			if err != nil {
+				log.Printf("failed to handshake: %v", err)
+				continue
+			}
+
+			// Discard all global out-of-band requests
+			go ssh.DiscardRequests(reqs)
+
+			// Handle incoming channels (SSH channels are used for interactive sessions or SFTP)
+			for ch := range chans {
+				go handleChannel(serverConn, ch)
+			}
+
+		}
+	*/
 }
 
 // handleChannel processes a single channel (for SFTP file transfers)
