@@ -12,7 +12,96 @@ import (
 
 const (
 	authorizedKeysPath = "internal/keys/authorized_keys"
+	address            = "0.0.0.0:2022"
 )
+
+// Handle an SFTP session over SSH
+func handleSFTPSession(conn ssh.Conn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
+	for newChannel := range chans {
+		// Only accept 'session' channels (these are used for SFTP)
+		if newChannel.ChannelType() != "session" {
+			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			continue
+		}
+
+		channel, _, err := newChannel.Accept()
+		if err != nil {
+			log.Printf("could not accept channel: %v", err)
+			continue
+		}
+
+		// Handle SFTP request over the channel
+		handleSFTPRequest(channel)
+	}
+}
+
+// Handle the SFTP subsystem on the channel
+func handleSFTPRequest(channel ssh.Channel) {
+	// Start an SFTP server over this channel
+	sftpServer, err := sftp.NewServer(channel)
+	if err != nil {
+		log.Printf("Failed to start SFTP server: %v", err)
+		return
+	}
+	defer sftpServer.Close()
+
+	// Serve the requests
+	if err := sftpServer.Serve(); err != nil {
+		log.Printf("SFTP server error: %v", err)
+	}
+}
+
+// Generate the SSH server configuration (with public key authentication)
+func generateSSHServerConfig(authorizedKeysMap map[string]bool) (*ssh.ServerConfig, error) {
+	// An SSH server is represented by a ServerConfig, which holds
+	// certificate details and handles authentication of ServerConns.
+	config := &ssh.ServerConfig{
+		// Remove to disable public key auth.
+		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
+			if authorizedKeysMap[string(pubKey.Marshal())] {
+				return &ssh.Permissions{
+					// Record the public key used for authentication.
+					Extensions: map[string]string{
+						"pubkey-fp": ssh.FingerprintSHA256(pubKey),
+					},
+				}, nil
+			}
+			return nil, fmt.Errorf("unknown public key for %q", c.User())
+		},
+	}
+
+	// Load the private key for the SSH server
+	privateBytes, err := os.ReadFile("id_rsa")
+	if err != nil {
+		log.Fatal("Failed to load private key: ", err)
+	}
+
+	private, err := ssh.ParsePrivateKey(privateBytes)
+	if err != nil {
+		log.Fatal("Failed to parse private key: ", err)
+	}
+	config.AddHostKey(private)
+	return config, nil
+	/*
+		// Load the private key for the SSH server
+		privateBytes, err := os.ReadFile("server_id_rsa")
+		if err != nil {
+			return nil, fmt.Errorf("unable to load private key: %v", err)
+		}
+		privateKey, err := ssh.ParsePrivateKey(privateBytes)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse private key: %v", err)
+		}
+
+		// Create the SSH server configuration
+		serverConfig := &ssh.ServerConfig{
+			NoClientAuth: false, // We will authenticate using public key
+		}
+		serverConfig.AddHostKey(privateKey)
+
+		return serverConfig, nil
+	*/
+}
 
 func main() {
 	// Public key authentication is done by comparing
@@ -34,141 +123,38 @@ func main() {
 		authorizedKeysBytes = rest
 	}
 
-	// An SSH server is represented by a ServerConfig, which holds
-	// certificate details and handles authentication of ServerConns.
-	config := &ssh.ServerConfig{
-		// Remove to disable password auth.
-		/*
-			PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-				// Should use constant-time compare (or better, salt+hash) in
-				// a production setting.
-				if c.User() == "testuser" && string(pass) == "tiger" {
-					return nil, nil
-				}
-				return nil, fmt.Errorf("password rejected for %q", c.User())
-			},
-		*/
-
-		// Remove to disable public key auth.
-		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-			if authorizedKeysMap[string(pubKey.Marshal())] {
-				return &ssh.Permissions{
-					// Record the public key used for authentication.
-					Extensions: map[string]string{
-						"pubkey-fp": ssh.FingerprintSHA256(pubKey),
-					},
-				}, nil
-			}
-			return nil, fmt.Errorf("unknown public key for %q", c.User())
-		},
-	}
-
-	privateBytes, err := os.ReadFile("id_rsa")
-	if err != nil {
-		log.Fatal("Failed to load private key: ", err)
-	}
-
-	private, err := ssh.ParsePrivateKey(privateBytes)
-	if err != nil {
-		log.Fatal("Failed to parse private key: ", err)
-	}
-	config.AddHostKey(private)
-	// TODO: https://pkg.go.dev/github.com/pkg/sftp#example-package
 	// Once a ServerConfig has been configured, connections can be
 	// accepted.
-	listener, err := net.Listen("tcp", "0.0.0.0:2022")
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		log.Fatal("failed to listen for connection: ", err)
 	}
 	defer listener.Close()
-
-	// TODO: Start with this part below!
-	var conn *ssh.Client // this is nil atm
-
-	client, err := sftp.NewClient()
+	// Generate the SSH server configuration
+	config, err := generateSSHServerConfig(authorizedKeysMap)
 	if err != nil {
-		log.Fatal(err)
+		return // fmt.Errorf("failed to generate SSH server config: %v", err)
 	}
-	defer client.Close()
-	// walk a directory
-	w := client.Walk("/home/user")
-	for w.Step() {
-		if w.Err() != nil {
+
+	log.Printf("SSH server started on %s", address)
+
+	for {
+		tcpConn, err := listener.Accept()
+		if err != nil {
+			log.Fatal("failed to accept incoming connection: ", err)
 			continue
 		}
-		log.Println(w.Path())
-	}
-
-	// leave your mark
-	f, err := client.Create("hello.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	if _, err := f.Write([]byte("Hello world!")); err != nil {
-		log.Fatal(err)
-	}
-	f.Close()
-
-	// check it's there
-	fi, err := client.Lstat("hello.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println(fi)
-
-	/*
-		for {
-			// Accept connections
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Printf("failed to accept connection: %v", err)
-				continue
-			}
-
-			// Handshake
-			serverConn, chans, reqs, err := ssh.NewServerConn(conn, config)
-			if err != nil {
-				log.Printf("failed to handshake: %v", err)
-				continue
-			}
-
-			// Discard all global out-of-band requests
-			go ssh.DiscardRequests(reqs)
-
-			// Handle incoming channels (SSH channels are used for interactive sessions or SFTP)
-			for ch := range chans {
-				go handleChannel(serverConn, ch)
-			}
-
+		// Perform SSH handshake
+		sshConn, chans, reqs, err := ssh.NewServerConn(tcpConn, config)
+		if err != nil {
+			log.Printf("failed to handshake: %v", err)
+			tcpConn.Close()
+			continue
 		}
-	*/
-}
 
-// handleChannel processes a single channel (for SFTP file transfers)
-func handleChannel(serverConn *ssh.ServerConn, ch ssh.NewChannel) {
-	// Accept the channel
-	channel, _, err := ch.Accept()
-	if err != nil {
-		log.Printf("failed to accept channel: %v", err)
-		return
+		log.Printf("Accepted SSH connection from %s", tcpConn.RemoteAddr())
+
+		// Handle the incoming SSH requests and channels
+		go handleSFTPSession(sshConn, chans, reqs)
 	}
-	defer channel.Close()
-
-	// Start an SFTP server on this channel
-	client, err := sftp.NewServer(channel)
-	if err != nil {
-		log.Printf("failed to start SFTP server: %v", err)
-		return
-	}
-	defer client.Close()
-
-	// The server automatically processes requests (like WRITE for file upload)
-	// so no need to manually handle requests.
-	if err := client.Serve(); err != nil {
-		log.Printf("failed to serve SFTP requests: %v", err)
-		return
-	}
-
-	log.Println("SFTP session ended successfully")
 }
