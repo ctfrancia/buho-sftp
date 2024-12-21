@@ -2,78 +2,19 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 
-	"flag"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	"io"
 )
 
 const (
 	authorizedKeysPath = "internal/keys/authorized_keys"
 	address            = "0.0.0.0:2022"
 )
-
-// Handle an SFTP session over SSH
-func handleSFTPSession(conn ssh.Conn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
-	fmt.Println("handleSFTPSession, conn: ", conn)
-	fmt.Println("handleSFTPSession, reqs: ", reqs)
-	go func(in <-chan *ssh.Request) {
-		for req := range in {
-			fmt.Fprintf(os.Stdout, "Request: %v\n", req.Type)
-			ok := false
-			switch req.Type {
-			case "subsystem":
-				fmt.Fprintf(os.Stdout, "Subsystem: %s\n", req.Payload[4:])
-				if string(req.Payload[4:]) == "sftp" {
-					ok = true
-				}
-			}
-			fmt.Fprintf(os.Stdout, " - accepted: %v\n", ok)
-			req.Reply(ok, nil)
-		}
-	}(reqs)
-	for newChannel := range chans {
-		// Only accept 'session' channels (these are used for SFTP)
-		if newChannel.ChannelType() != "session" {
-			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-
-		channel, _, err := newChannel.Accept()
-		if err != nil {
-			log.Printf("could not accept channel: %v", err)
-			continue
-		}
-
-		// Handle SFTP request over the channel
-		handleSFTPRequest(channel)
-	}
-}
-
-// Handle the SFTP subsystem on the channel
-func handleSFTPRequest(channel ssh.Channel) {
-	// Start an SFTP server over this channel
-	sftpServer, err := sftp.NewServer(channel)
-	if err != nil {
-		log.Printf("Failed to start SFTP server: %v", err)
-		return
-	}
-
-	defer sftpServer.Close()
-
-	// Serve the requests
-	if err := sftpServer.Serve(); err != nil {
-		if err != io.EOF {
-			log.Fatal("sftp server completed with error:", err)
-		}
-		log.Printf("SFTP server error: %v", err)
-	}
-	sftpServer.Close()
-}
 
 // Generate the SSH server configuration (with public key authentication)
 func generateSSHServerConfig(authorizedKeysMap map[string]bool) (*ssh.ServerConfig, error) {
@@ -108,6 +49,7 @@ func generateSSHServerConfig(authorizedKeysMap map[string]bool) (*ssh.ServerConf
 	return config, nil
 }
 
+/*
 func main() {
 	var (
 		readOnly    bool
@@ -216,6 +158,8 @@ func main() {
 			fmt.Fprintf(debugStream, "Read write server\n")
 		}
 
+		fmt.Fprintf(debugStream, "Starting sftp server %#v", serverOptions)
+
 		server, err := sftp.NewServer(
 			channel,
 			serverOptions...,
@@ -232,8 +176,8 @@ func main() {
 		log.Print("sftp client exited session.")
 	}
 }
+*/
 
-/*
 func main() {
 	// Public key authentication is done by comparing
 	// the public key of a received connection
@@ -277,7 +221,7 @@ func main() {
 			continue
 		}
 		// Perform SSH handshake
-		sshConn, chans, reqs, err := ssh.NewServerConn(tcpConn, config)
+		_, chans, reqs, err := ssh.NewServerConn(tcpConn, config)
 		if err != nil {
 			log.Printf("failed to handshake: %v", err)
 			tcpConn.Close()
@@ -287,7 +231,68 @@ func main() {
 		log.Printf("Accepted SSH connection from %s", tcpConn.RemoteAddr())
 
 		// Handle the incoming SSH requests and channels
-		go handleSFTPSession(sshConn, chans, reqs)
+		go handleSFTPSession(chans, reqs)
 	}
 }
-*/
+
+// Handle an SFTP session over SSH
+func handleSFTPSession(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
+	for newChannel := range chans {
+		// Only accept 'session' channels (these are used for SFTP)
+		fmt.Printf("Incoming channel: %s\n", newChannel.ChannelType())
+		if newChannel.ChannelType() != "session" {
+			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			fmt.Fprintf(os.Stdout, "Unknown channel type: %s\n", newChannel.ChannelType())
+			continue
+		}
+
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			log.Printf("could not accept channel: %v", err)
+			continue
+		}
+
+		go func(in <-chan *ssh.Request) {
+			for req := range in {
+				fmt.Fprintf(os.Stdout, "Request: %v\n", req.Type)
+				ok := false
+				switch req.Type {
+				case "subsystem":
+					fmt.Fprintf(os.Stdout, "Subsystem: %s\n", req.Payload[4:])
+					if string(req.Payload[4:]) == "sftp" {
+						ok = true
+					}
+				}
+				fmt.Fprintf(os.Stdout, " - accepted: %v\n", ok)
+				req.Reply(ok, nil)
+			}
+		}(requests)
+
+		// Handle SFTP request over the channel
+		handleSFTPRequest(channel)
+	}
+}
+
+// Handle the SFTP subsystem on the channel
+func handleSFTPRequest(channel ssh.Channel) {
+	// Start an SFTP server over this channel
+	serveroptions := []sftp.ServerOption{
+		sftp.WithDebug(os.Stdout),
+	}
+	sftpServer, err := sftp.NewServer(channel, serveroptions...)
+	if err != nil {
+		log.Printf("Failed to start SFTP server: %v", err)
+		return
+	}
+
+	defer sftpServer.Close()
+
+	// Serve the requests
+	if err := sftpServer.Serve(); err != nil {
+		if err != io.EOF {
+			log.Fatal("sftp server completed with error:", err)
+		}
+		log.Printf("SFTP server error: %v", err)
+	}
+	sftpServer.Close()
+}
