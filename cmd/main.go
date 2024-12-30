@@ -45,6 +45,7 @@ func generateSSHServerConfig(authorizedKeysMap map[string]bool) (*ssh.ServerConf
 	if err != nil {
 		log.Fatal("Failed to parse private key: ", err)
 	}
+
 	config.AddHostKey(private)
 	return config, nil
 }
@@ -62,7 +63,7 @@ func main() {
 	for len(authorizedKeysBytes) > 0 {
 		pubKey, _, _, rest, err := ssh.ParseAuthorizedKey(authorizedKeysBytes)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("error reading key: ", err)
 		}
 
 		authorizedKeysMap[string(pubKey.Marshal())] = true
