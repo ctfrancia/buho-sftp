@@ -2,4 +2,6 @@ id_rsa*
 internal/keys/*
 home/*
 
+.DS_Store
+
 *.pem
